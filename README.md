@@ -4,9 +4,9 @@
 
 ## Overview
 
-Most AI news tools rely on single-prompt summaries that blindly echo clickbait headlines or produce overly neutral "fence-sitting" answers. **`negotiator-ai`** eliminates manual browsing and emotional bias by turning market analysis into a structured, concurrent debate.
+Most AI news tools rely on single-prompt summaries that blindly echo clickbait headlines or produce overly neutral "fence-sitting" answers. **`negotiator-ai`** eliminates manual browsing and emotional bias by turning market analysis into a structured, multi-round debate.
 
-When breaking news hits, a Go pipeline pairs the article with real-time market metrics and spins up isolated AI agents with opposing mandates. After arguing the upside and downside cases against hard numbers, a final **Negotiator Agent** synthesizes the arguments into a machine-readable JSON verdict.
+When breaking news hits, a Go pipeline pairs the article with real-time market metrics and spins up isolated AI agents with opposing mandates. After arguing opening statements and firing back direct rebuttals against hard numbers, a final **Negotiator Agent** synthesizes the debate into a machine-readable JSON verdict.
 
 ## Architecture & Pipeline
 
@@ -16,16 +16,17 @@ When breaking news hits, a Go pipeline pairs the article with real-time market m
 2. **Market Context Enrichment (`internal/market`)**
    - Queries live CoinGecko market data (price action, 24h change, and 24h volume) at the exact moment news breaks.
    - Injects hard numerical context alongside the text so agents cannot hallucinate market reactions.
-3. **Concurrent Adversarial Debate & Verdict (`internal/agents`)**
-   - Uses Go routines and `errgroup` to execute opposing agents simultaneously:
-     - **Bull Agent:** Argues strictly for upside catalysts, adoption signals, and momentum.
-     - **Bear Agent:** Audits the claim for hype, missing data, and priced-in expectations.
-   - A **Judge/Negotiator Agent** cross-examines both opening arguments against the raw market data and enforces a strict JSON schema.
+3. **Two-Round Adversarial Debate & Verdict (`internal/agents`)**
+   - Uses Go routines and `errgroup` to execute opposing agents concurrently across two rounds:
+     - **Round 1 (Opening Statements):** The **Bull Agent** argues upside catalysts while the **Bear Agent** audits the claim for hype and priced-in expectations.
+     - **Round 2 (Direct Rebuttals):** Both agents read their opponent's opening thesis and dismantle its weakest assumptions using live market numbers.
+   - Includes **exponential backoff retries** and inter-article cooldown pacing to stay within free-tier API rate limits.
+   - A **Judge/Negotiator Agent** cross-examines both rounds and enforces a strict JSON schema.
 
 ## Tech Stack
 
 - **Language:** Go 1.23+ (Goroutines & `errgroup` for concurrent agent execution)
-- **LLM Orchestration:** Official OpenAI Go SDK (`openai-go`) configured for Google Gemini Flash (`gemini-3-flash-preview`)
+- **LLM Orchestration:** Official OpenAI Go SDK (`openai-go`) configured for Google Gemini Flash (`gemini-3-flash-preview` / `gemini-3.5-flash-lite`)
 - **Data Ingestion:** `gofeed` (RSS parsing with custom User-Agent)
 - **Market Data:** CoinGecko public REST API
 - **Storage:** Pure-Go SQLite (`glebarez/go-sqlite`) for article deduplication & verdict history
@@ -36,10 +37,10 @@ When breaking news hits, a Go pipeline pairs the article with real-time market m
 negotiator-ai/
 ├── cmd/
 │   └── server/
-│       └── main.go              # Entry point & pipeline orchestrator
+│       └── main.go              # Entry point, pacing & pipeline orchestrator
 ├── internal/
 │   ├── agents/
-│   │   └── debates.go           # Concurrent Bull/Bear runners & Judge verdict parser
+│   │   └── debates.go           # Concurrent 2-round Bull/Bear debate, retries & Judge parser
 │   ├── ingestor/
 │   │   └── rss.go               # RSS feed poller & HTML cleaner
 │   ├── market/
@@ -90,8 +91,8 @@ Instead of a wall of conversational text, **`negotiator-ai`** produces structure
 ### Installation
 
 ```bash
-# Clone the repository (replace with your GitHub repo URL)
-git clone https://github.com
+# Clone the repository
+git clone https://github.com/billy-se/negotiator-ai
 cd negotiator-ai
 
 # Create your .env file and add your API key
@@ -106,8 +107,8 @@ go run ./cmd/server
 
 - [x] **Phase 1:** Core RSS poller, SQLite deduplication, and concurrent Bull/Bear/Judge pipeline
 - [x] **Phase 2:** Live market API integration (CoinGecko)
-- [ ] **Phase 3:** Multi-round rebuttal loop (agents directly critique each other's opening statements)
-- [ ] **Phase 4:** Scheduled background worker & Discord/Telegram webhook alerts
+- [x] **Phase 3:** Multi-round rebuttal loop (agents directly critique each other's opening statements) with rate-limit backoff
+- [ ] **Phase 4:** Scheduled background worker, `MOCK_AI` dev mode, & Discord/Telegram webhook alerts
 - [ ] **Phase 5:** Historical accuracy tracker (automatically grading past scenarios against actual 24h price outcomes)
 
-Disclaimer: This project is for educational and research purposes only and does not constitute financial or investment advice.
+*Disclaimer: This project is for educational and research purposes only and does not constitute financial or investment advice.*

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"negotiator-ai/internal/agents"
 	"negotiator-ai/internal/ingestor"
@@ -50,7 +51,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	for _, art := range articles {
+	for i, art := range articles {
 		seen, err := db.HasProcessed(art.Link)
 		if err != nil {
 			log.Printf("DB lookup error: %v", err)
@@ -75,6 +76,11 @@ func main() {
 
 		if err := db.SaveVerdict(art.Link, art.Title, verdict.HypeScore, string(prettyJSON)); err != nil {
 			log.Printf("Failed to save verdict: %v", err)
+		}
+
+		if i < len(articles)-1 {
+			fmt.Println("Cooling down 10s before next article...")
+			time.Sleep(25 * time.Second)
 		}
 	}
 }

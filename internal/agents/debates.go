@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -38,43 +39,75 @@ func NewEngine(apiKey, baseURL, model string) *Engine {
 }
 
 func (e *Engine) RunDebate(ctx context.Context, article, marketData string) (*Verdict, error) {
-	var bullThesis, bearThesis string
+	var bullOpening, bearOpening string
 
-	g, gCtx := errgroup.WithContext(ctx)
+	g1, gCtx1 := errgroup.WithContext(ctx)
 
-	g.Go(func() error {
+	g1.Go(func() error {
 		prompt := fmt.Sprintf("News: %s\nMarket Data: %s", article, marketData)
-		res, err := e.askAgent(gCtx,
+		res, err := e.askAgent(gCtx1,
 			"You are a ruthless Bullish Market Analyst. Argue ONLY the upside catalysts and momentum opportunities. Be concise (max 3 bullet points).",
 			prompt, false)
-		bullThesis = res
+		bullOpening = res
 		return err
 	})
 
-	g.Go(func() error {
+	g1.Go(func() error {
 		prompt := fmt.Sprintf("News: %s\nMarket Data: %s", article, marketData)
-		res, err := e.askAgent(gCtx,
+		res, err := e.askAgent(gCtx1,
 			"You are a cynical Bearish Skeptic. Attack the news for hype, missing data, or priced-in expectations using the hard market numbers. Be concise (max 3 bullet points).",
 			prompt, false)
-		bearThesis = res
+		bearOpening = res
 		return err
 	})
 
-	if err := g.Wait(); err != nil {
-		return nil, fmt.Errorf("debate failed: %w", err)
+	if err := g1.Wait(); err != nil {
+		return nil, fmt.Errorf("round 1 opening failed: %w", err)
 	}
 
-	judgeInput := fmt.Sprintf("News:\n%s\n\nMarket Data:\n%s\n\nBull Argument:\n%s\n\nBear Argument:\n%s",
-		article, marketData, bullThesis, bearThesis)
-	judgeSystem := `You are an objective Market Negotiator. Weigh the Bull and Bear arguments against the raw market data.
+	var bullRebuttal, bearRebuttal string
+	g2, gCtx2 := errgroup.WithContext(ctx)
+
+	g2.Go(func() error {
+		prompt := fmt.Sprintf(
+			"News: %s\nMarket Data: %s\n\nYour Opening Argument:\n%s\nBear's Counter-Argument:\n%s\n\nDirectly dismantle the Bear's strongest point in 2 concise bullet points.",
+			article, marketData, bullOpening, bearOpening,
+		)
+		res, err := e.askAgent(gCtx2,
+			"You are ruthless Bullish Market Analyst in a live debate. Attack the Bear's pessimism and defend the upside thesis using hard numbers.",
+			prompt, false)
+		bullRebuttal = res
+		return err
+	})
+
+	g2.Go(func() error {
+		prompt := fmt.Sprintf(
+			"News: %s\nMarket Data: %s\n\nYour Opening Argument:\n%s\n\nBull's Counter-Argument:\n%s\n\nDirectly expose the flaws in the Bull's optimism in 2 concise bullet points.",
+			article, marketData, bearOpening, bullOpening,
+		)
+		res, err := e.askAgent(gCtx2,
+			"You are a cynical Bearish Skeptic in a live debate. Expose every assumption or risk the Bull ignored using the live market data.",
+			prompt, false)
+		bearRebuttal = res
+		return err
+	})
+
+	if err := g2.Wait(); err != nil {
+		return nil, fmt.Errorf("Round 2 rebuttal failed: %w", err)
+	}
+
+	judgeInput := fmt.Sprintf("News:\n%s\n\nMarket Data:\n%s\n\n--- ROUND 1: OPENING ---\nBull:\n%s\n\nBear:\n%s\n\n--- ROUND 2: REBUTTALS ---\nBull Rebuttal:\n%s\n\nBear Rebuttal:\n%s",
+		article, marketData, bullOpening, bearOpening, bullRebuttal, bearRebuttal,
+	)
+	judgeSystem := `You are an objective Market Negotiator judging a two-round debate. Weigh both opening statements AND how well each side survived the opponent's rebuttal against the raw market data.
 	Output ONLY valid JSON matching this structure:
 	{
-		"bull_summary": "string",
-		"bear_summary": "string",
-		"hype_score": 1-10,
-		"scenarios": [
-			{"scenario": "string", "probability_pct": number, "watch_signal": "string"}
-		]
+	"bull_summary": "string",
+	"bear_summary": "string",
+	"hype_score": 1,
+	"scenarios": [
+		{"scenario": "string", "probability_pct": 50, "watch_signal": "string"}
+	]
 	}`
 
 	rawJSON, err := e.askAgent(ctx, judgeSystem, judgeInput, true)
@@ -104,12 +137,24 @@ func (e *Engine) askAgent(ctx context.Context, systemPrompt, userPrompt string, 
 		}
 	}
 
-	resp, err := e.client.Chat.Completions.New(ctx, params)
-	if err != nil {
-		return "", err
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err := e.client.Chat.Completions.New(ctx, params)
+		if err == nil {
+			if len(resp.Choices) == 0 {
+				return "", fmt.Errorf("empty response from API")
+			}
+			return resp.Choices[0].Message.Content, nil
+		}
+
+		lastErr = err
+		wait := time.Duration(5*(attempt+1)) * time.Second
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(wait):
+		}
 	}
-	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("empty responses from API")
-	}
-	return resp.Choices[0].Message.Content, nil
+
+	return "", fmt.Errorf("agent failed after retries: %w", lastErr)
 }
